@@ -63,6 +63,8 @@ def build_training_system_prompt(topic: str, material: str, total_questions: int
 - если phase = testing и задаешь вопрос, положи его текст в next_question;
 - если оцениваешь ответ на вопрос теста, поставь latest_answer_evaluated = true;
 - если ответ неверный или неполный, answer_is_correct должен быть false;
+- если phase = testing, нельзя просить пользователя ответить на тот же вопрос ещё раз;
+- если phase = testing, нельзя возвращаться к обучению, пересказу материала или фразам вроде «готов к тесту?»;
 - если phase = testing, ответ сотрудника уже оценен и тест не завершен, обязательно задай следующий вопрос:
   либо включи его в reply, либо заполни next_question;
 - если идет первый вопрос теста и ответ пользователя еще не оценивался, latest_answer_evaluated = false;

@@ -26,6 +26,53 @@ class AITrainingService:
         user_message: str,
         is_new_dialogue: bool,
     ) -> TrainingAssistantTurn:
+        prompt_message = user_message
+        for attempt in range(2):
+            ai_turn = await self._request_turn(
+                draft=draft,
+                user_message=prompt_message,
+                is_new_dialogue=is_new_dialogue,
+            )
+            if self._is_valid_turn(draft, ai_turn):
+                return ai_turn
+
+            prompt_message = (
+                f"{user_message}\n\n"
+                "Служебное уточнение: сейчас идёт тестирование. "
+                "Нужно строго оценить текущий ответ, обязательно выставить latest_answer_evaluated=true, "
+                "не просить ответить ещё раз и не возвращаться к обучению."
+            )
+
+        return ai_turn
+
+    async def close(self) -> None:
+        await self._client.aclose()
+
+    @staticmethod
+    def _build_prompt(
+        draft: TrainingSessionDraft,
+        user_message: str,
+        is_new_dialogue: bool,
+    ) -> str:
+        serialized_draft = json.dumps(draft.model_dump(), ensure_ascii=False, indent=2)
+        return (
+            f"Новая сессия: {str(is_new_dialogue).lower()}\n"
+            f"Текущее состояние сессии:\n{serialized_draft}\n\n"
+            f"Последнее сообщение сотрудника:\n{user_message}\n\n"
+            "Важно:\n"
+            "- если phase сейчас learning, сначала помогай разобраться с текущим разделом и не запускай тест без явной готовности;\n"
+            "- если phase сейчас testing и current_question заполнен, оцени именно ответ на current_question;\n"
+            "- questions_answered уже содержит число проверенных ответов;\n"
+            "- если questions_answered уже равно total_questions - 1 и ты оцениваешь текущий ответ, не задавай новый вопрос;\n"
+            "- когда проверенных ответов станет столько же, сколько total_questions, заверши сессию через phase=completed."
+        )
+
+    async def _request_turn(
+        self,
+        draft: TrainingSessionDraft,
+        user_message: str,
+        is_new_dialogue: bool,
+    ) -> TrainingAssistantTurn:
         current_section = draft.current_section()
         payload = {
             "model": self._settings.openai_model,
@@ -60,27 +107,18 @@ class AITrainingService:
         content = response.json()["choices"][0]["message"]["content"]
         return TrainingAssistantTurn.model_validate(self._parse_content(content))
 
-    async def close(self) -> None:
-        await self._client.aclose()
-
     @staticmethod
-    def _build_prompt(
-        draft: TrainingSessionDraft,
-        user_message: str,
-        is_new_dialogue: bool,
-    ) -> str:
-        serialized_draft = json.dumps(draft.model_dump(), ensure_ascii=False, indent=2)
-        return (
-            f"Новая сессия: {str(is_new_dialogue).lower()}\n"
-            f"Текущее состояние сессии:\n{serialized_draft}\n\n"
-            f"Последнее сообщение сотрудника:\n{user_message}\n\n"
-            "Важно:\n"
-            "- если phase сейчас learning, сначала помогай разобраться с текущим разделом и не запускай тест без явной готовности;\n"
-            "- если phase сейчас testing и current_question заполнен, оцени именно ответ на current_question;\n"
-            "- questions_answered уже содержит число проверенных ответов;\n"
-            "- если questions_answered уже равно total_questions - 1 и ты оцениваешь текущий ответ, не задавай новый вопрос;\n"
-            "- когда проверенных ответов станет столько же, сколько total_questions, заверши сессию через phase=completed."
-        )
+    def _is_valid_turn(draft: TrainingSessionDraft, ai_turn: TrainingAssistantTurn) -> bool:
+        if draft.phase != "testing" or not draft.current_question:
+            return True
+
+        if not ai_turn.latest_answer_evaluated:
+            return False
+
+        if ai_turn.phase not in {"testing", "completed"}:
+            return False
+
+        return True
 
     @staticmethod
     def _parse_content(content: str) -> dict:
