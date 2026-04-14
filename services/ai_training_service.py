@@ -26,6 +26,7 @@ class AITrainingService:
         user_message: str,
         is_new_dialogue: bool,
     ) -> TrainingAssistantTurn:
+        current_section = draft.current_section()
         payload = {
             "model": self._settings.openai_model,
             "temperature": 0.2,
@@ -34,8 +35,9 @@ class AITrainingService:
                     "role": "system",
                     "content": build_training_system_prompt(
                         topic=self._settings.training_topic,
-                        material=self._training_material,
+                        material=current_section.material,
                         total_questions=draft.total_questions,
+                        section_title=current_section.title,
                     ),
                 },
                 {
@@ -56,7 +58,7 @@ class AITrainingService:
         response = await self._client.post("/chat/completions", json=payload)
         response.raise_for_status()
         content = response.json()["choices"][0]["message"]["content"]
-        return TrainingAssistantTurn.model_validate(json.loads(content))
+        return TrainingAssistantTurn.model_validate(self._parse_content(content))
 
     async def close(self) -> None:
         await self._client.aclose()
@@ -73,8 +75,18 @@ class AITrainingService:
             f"Текущее состояние сессии:\n{serialized_draft}\n\n"
             f"Последнее сообщение сотрудника:\n{user_message}\n\n"
             "Важно:\n"
-            "- если phase сейчас learning, сначала обучай и только потом переводи в testing;\n"
+            "- если phase сейчас learning, сначала помогай разобраться с текущим разделом и не запускай тест без явной готовности;\n"
             "- если phase сейчас testing и current_question заполнен, оцени именно ответ на current_question;\n"
             "- questions_answered уже содержит число проверенных ответов;\n"
+            "- если questions_answered уже равно total_questions - 1 и ты оцениваешь текущий ответ, не задавай новый вопрос;\n"
             "- когда проверенных ответов станет столько же, сколько total_questions, заверши сессию через phase=completed."
         )
+
+    @staticmethod
+    def _parse_content(content: str) -> dict:
+        try:
+            return json.loads(content)
+        except json.JSONDecodeError:
+            decoder = json.JSONDecoder()
+            parsed, _ = decoder.raw_decode(content.lstrip())
+            return parsed
